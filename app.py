@@ -33,7 +33,7 @@ st.title("Vinted Link Image Generator")
 theme = st.radio("Select Theme", ["Dark Mode", "Light Mode"], horizontal=False)
 st.markdown(DARK_CSS if theme == "Dark Mode" else LIGHT_CSS, unsafe_allow_html=True)
 
-remove_bg = st.toggle("Remove Background", value=True)
+remove_bg = False
 
 mode = st.radio("Choose Mode", ["Single URL", "Bulk URLs"])
 
@@ -160,8 +160,7 @@ def wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont
 
 
 def remove_background(img: Image.Image) -> Image.Image:
-    from rembg import remove
-    return remove(img)
+    return img
 
 
 def build_card(photo: Image.Image | None, title: str, details: str, price: str, bg_rgb: tuple) -> Image.Image:
