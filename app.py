@@ -33,8 +33,7 @@ st.title("Vinted Link Image Generator")
 theme = st.radio("Select Theme", ["Dark Mode", "Light Mode"], horizontal=False)
 st.markdown(DARK_CSS if theme == "Dark Mode" else LIGHT_CSS, unsafe_allow_html=True)
 
-remove_bg = False
-st.caption("Bakgrunnsfjerning kommer snart — bildet bruker den fargede bakgrunnen som ramme rundt hele bildet foreløpig.")
+remove_bg = st.toggle("Remove Background", value=True)
 
 mode = st.radio("Choose Mode", ["Single URL", "Bulk URLs"])
 
@@ -54,6 +53,25 @@ HEADERS = {
 }
 
 
+CURRENCY_FORMAT = {
+    "GBP": ("£", "prefix"),
+    "EUR": ("€", "prefix"),
+    "USD": ("$", "prefix"),
+    "NOK": ("kr", "suffix"),
+    "SEK": ("kr", "suffix"),
+    "DKK": ("kr", "suffix"),
+}
+
+
+def format_price(amount: str, currency: str) -> str:
+    if not amount:
+        return ""
+    symbol, pos = CURRENCY_FORMAT.get((currency or "").upper(), (currency or "", "suffix"))
+    if not symbol:
+        return amount
+    return f"{symbol}{amount}" if pos == "prefix" else f"{amount} {symbol}"
+
+
 CONDITION_MAP = {
     "newcondition": "New with tags",
     "usedcondition": "Used",
@@ -67,7 +85,7 @@ def fetch_listing(url: str) -> dict:
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    data = {"title": "", "price": "", "details": "", "image_url": "", "size": "", "condition": ""}
+    data = {"title": "", "price": "", "currency": "", "details": "", "image_url": "", "size": "", "condition": ""}
 
     for script in soup.find_all("script", type="application/ld+json"):
         try:
@@ -90,6 +108,7 @@ def fetch_listing(url: str) -> dict:
                     offers = offers[0] if offers else {}
                 if isinstance(offers, dict) and offers.get("price"):
                     data["price"] = data["price"] or str(offers["price"])
+                    data["currency"] = data["currency"] or offers.get("priceCurrency", "")
                 brand = prod.get("brand")
                 if isinstance(brand, dict):
                     data["details"] = data["details"] or brand.get("name", "")
@@ -141,7 +160,8 @@ def wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont
 
 
 def remove_background(img: Image.Image) -> Image.Image:
-    return img
+    from rembg import remove
+    return remove(img)
 
 
 def build_card(photo: Image.Image | None, title: str, details: str, price: str, bg_rgb: tuple) -> Image.Image:
@@ -160,24 +180,24 @@ def build_card(photo: Image.Image | None, title: str, details: str, price: str, 
     else:
         draw.text((W // 2, top_h // 2), "Image unavailable", font=get_font(22), fill=(255, 255, 255), anchor="mm")
 
-    draw.rectangle([0, top_h, W, top_h + 64], fill=(47, 143, 91))
-    draw.text((32, top_h + 32), "SOLD", font=get_font(28, bold=True), fill=(243, 239, 228), anchor="lm")
+    draw.rectangle([0, top_h, W, top_h + 56], fill=(47, 143, 91))
+    draw.text((32, top_h + 28), "SOLD", font=get_font(22, bold=True), fill=(243, 239, 228), anchor="lm")
 
-    y = top_h + 64 + 44
-    title_font = get_font(36, bold=True)
+    y = top_h + 56 + 36
+    title_font = get_font(26, bold=True)
     title_lines = wrap_text(draw, title or "Item title", title_font, W - 64)
     for line in title_lines:
         draw.text((32, y), line, font=title_font, fill=(243, 239, 228))
-        y += 46
+        y += 34
 
     y += 6
     if details:
-        draw.text((32, y), details, font=get_font(22), fill=(200, 196, 186))
-        y += 42
+        draw.text((32, y), details, font=get_font(18), fill=(200, 196, 186))
+        y += 32
 
-    y += 10
+    y += 8
     if price:
-        draw.text((32, y), price, font=get_font(32, bold=True), fill=(243, 239, 228))
+        draw.text((32, y), price, font=get_font(26, bold=True), fill=(243, 239, 228))
 
     return card
 
@@ -216,7 +236,7 @@ if st.button("Generate Image"):
 
             details_parts = [p for p in [data.get("size"), data.get("condition"), data.get("details")] if p]
             details_line = " · ".join(details_parts)
-            price_text = f"{data['price']} kr" if data["price"] else ""
+            price_text = format_price(data["price"], data.get("currency", ""))
 
             card = build_card(photo, data["title"], details_line, price_text, BG_COLORS[bg_color_name])
             st.image(card)
