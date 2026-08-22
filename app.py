@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
@@ -31,7 +33,8 @@ st.title("Vinted Link Image Generator")
 theme = st.radio("Select Theme", ["Dark Mode", "Light Mode"], horizontal=False)
 st.markdown(DARK_CSS if theme == "Dark Mode" else LIGHT_CSS, unsafe_allow_html=True)
 
-remove_bg = st.toggle("Remove Background", value=True)
+remove_bg = False
+st.caption("Bakgrunnsfjerning kommer snart — bildet bruker den fargede bakgrunnen som ramme rundt hele bildet foreløpig.")
 
 mode = st.radio("Choose Mode", ["Single URL", "Bulk URLs"])
 
@@ -51,12 +54,20 @@ HEADERS = {
 }
 
 
+CONDITION_MAP = {
+    "newcondition": "New with tags",
+    "usedcondition": "Used",
+    "refurbishedcondition": "Refurbished",
+    "damagedcondition": "Damaged",
+}
+
+
 def fetch_listing(url: str) -> dict:
     resp = requests.get(url, headers=HEADERS, timeout=12)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    data = {"title": "", "price": "", "details": "", "image_url": ""}
+    data = {"title": "", "price": "", "details": "", "image_url": "", "size": "", "condition": ""}
 
     for script in soup.find_all("script", type="application/ld+json"):
         try:
@@ -82,6 +93,12 @@ def fetch_listing(url: str) -> dict:
                 brand = prod.get("brand")
                 if isinstance(brand, dict):
                     data["details"] = data["details"] or brand.get("name", "")
+                if prod.get("size"):
+                    data["size"] = data["size"] or str(prod.get("size"))
+                cond = prod.get("itemCondition", "")
+                if cond:
+                    key = str(cond).rstrip("/").split("/")[-1].lower()
+                    data["condition"] = data["condition"] or CONDITION_MAP.get(key, "")
 
     if not data["image_url"]:
         og_img = soup.find("meta", property="og:image")
@@ -98,6 +115,7 @@ def get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ]
     for path in candidates:
         try:
@@ -107,9 +125,23 @@ def get_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
     return ImageFont.load_default()
 
 
+def wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int, max_lines: int = 2) -> list:
+    words = text.split()
+    lines, line = [], ""
+    for word in words:
+        test = (line + " " + word).strip()
+        if draw.textlength(test, font=font) > max_width and line:
+            lines.append(line)
+            line = word
+        else:
+            line = test
+    if line:
+        lines.append(line)
+    return lines[:max_lines]
+
+
 def remove_background(img: Image.Image) -> Image.Image:
-    from rembg import remove
-    return remove(img)
+    return img
 
 
 def build_card(photo: Image.Image | None, title: str, details: str, price: str, bg_rgb: tuple) -> Image.Image:
@@ -126,20 +158,26 @@ def build_card(photo: Image.Image | None, title: str, details: str, price: str, 
         resized = photo.resize((iw, ih))
         card.paste(resized, ((W - iw) // 2, (top_h - ih) // 2), resized)
     else:
-        font = get_font(20)
-        draw.text((W // 2, top_h // 2), "Image unavailable", font=font, fill=(255, 255, 255), anchor="mm")
+        draw.text((W // 2, top_h // 2), "Image unavailable", font=get_font(22), fill=(255, 255, 255), anchor="mm")
 
     draw.rectangle([0, top_h, W, top_h + 64], fill=(47, 143, 91))
-    draw.text((32, top_h + 32), "SOLD", font=get_font(26, bold=True), fill=(243, 239, 228), anchor="lm")
+    draw.text((32, top_h + 32), "SOLD", font=get_font(28, bold=True), fill=(243, 239, 228), anchor="lm")
 
-    y = top_h + 64 + 40
-    draw.text((32, y), title or "Item title", font=get_font(28, bold=True), fill=(243, 239, 228))
-    y += 42
+    y = top_h + 64 + 44
+    title_font = get_font(36, bold=True)
+    title_lines = wrap_text(draw, title or "Item title", title_font, W - 64)
+    for line in title_lines:
+        draw.text((32, y), line, font=title_font, fill=(243, 239, 228))
+        y += 46
+
+    y += 6
     if details:
-        draw.text((32, y), details, font=get_font(18), fill=(200, 196, 186))
-        y += 34
+        draw.text((32, y), details, font=get_font(22), fill=(200, 196, 186))
+        y += 42
+
+    y += 10
     if price:
-        draw.text((32, y), price, font=get_font(26, bold=True), fill=(243, 239, 228))
+        draw.text((32, y), price, font=get_font(32, bold=True), fill=(243, 239, 228))
 
     return card
 
@@ -173,10 +211,14 @@ if st.button("Generate Image"):
                 try:
                     with st.spinner("Removing background..."):
                         photo = remove_background(photo)
-                except Exception:
-                    st.warning("Background removal failed — showing the original photo instead.")
+                except Exception as bg_error:
+                    st.warning(f"Background removal failed, showing the original photo. Details: {bg_error}")
 
-            card = build_card(photo, data["title"], data["details"], data["price"], BG_COLORS[bg_color_name])
+            details_parts = [p for p in [data.get("size"), data.get("condition"), data.get("details")] if p]
+            details_line = " · ".join(details_parts)
+            price_text = f"{data['price']} kr" if data["price"] else ""
+
+            card = build_card(photo, data["title"], details_line, price_text, BG_COLORS[bg_color_name])
             st.image(card)
 
             buf = BytesIO()
